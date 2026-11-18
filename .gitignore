@@ -1,0 +1,8 @@
+*.npy
+*.pt
+*.tar
+*.zip
+*.log
+__pycache__/
+*.bak*
+.DS_Store
