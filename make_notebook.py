@@ -26,13 +26,13 @@ N_SHARDS = 1   # đổi thành 2, 3, ... để tải thêm; shard đã có trên
 
 TRAIN = r"""import subprocess, sys, time, os
 import torch; assert torch.cuda.is_available(), 'Chưa có GPU: đổi runtime sang GPU'
-B9, TAG, SEEDS = 'shard_000', 'b9s1', range(5)   # 2 shard: B9='shard_000,shard_001', TAG='b9s2'
+B9, TAG, SEEDS, EPOCHS = 'shard_000', 'b9s1', range(5), 60    # 2 shard: B9='shard_000,shard_001', TAG='b9s2'
 T = time.time()
 for s in SEEDS:
     n = f'{TAG}_c4aug_s{s}'
     if os.path.exists(f'runs/{n}/final_metrics.json'): print(n, 'đã xong, bỏ qua'); continue
     print(f'\n>>> {n}  [{(time.time() - T) / 60:.1f} phút]', flush=True)
-    pr = subprocess.Popen([sys.executable, '-u', 'repo/train_v3.py', '--name', n, '--seed', str(s), '--b9', B9],
+    pr = subprocess.Popen([sys.executable, '-u', 'repo/train_v3.py', '--name', n, '--seed', str(s), '--b9', B9, '--epochs', str(EPOCHS)],
                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     with open(f'runs/{n}.log', 'a') as lg:
         for ln in pr.stdout:
