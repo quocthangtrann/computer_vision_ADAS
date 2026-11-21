@@ -60,6 +60,11 @@ for c in ['road', 'ff', 'notours', 'ego', 'adj']:
     print(f'{c:8s} cơ sở {A[c].mean():.4f} ± {A[c].std():.4f} | thêm b9 {B[c].mean():.4f} ± {B[c].std():.4f} | hiệu {d:+.4f} (t = {d / se:+.1f})')
 """
 
+INT8 = r"""RUN, OUT = 'runs/b9s4_c4aug_s0', 'handoff_s3b'   # đổi RUN khi lượng tử mô hình khác
+!python -u repo/int8_sim.py --run {RUN} --out {OUT} 2>&1 | tee -a runs/int8_sim.log
+!python -u repo/int8_pack.py --run {RUN} --out {OUT} 2>&1 | tee -a runs/int8_pack.log
+"""
+
 def nb(cells):
     return {"cells": [{"cell_type": "code", "metadata": {}, "execution_count": None, "outputs": [],
                        "source": c.splitlines(keepends=True)} for c in cells],
@@ -67,6 +72,8 @@ def nb(cells):
                          "language_info": {"name": "python"}},
             "nbformat": 4, "nbformat_minor": 4}
 
-for name, cells in [('10_data', [DEPLOY, DATA]), ('20_train', [DEPLOY, TRAIN]), ('30_eval', [EVAL_A, EVAL_B])]:
+for name, cells in [('10_data', [DEPLOY, DATA]), ('20_train', [DEPLOY, TRAIN]), ('30_eval', [EVAL_A, EVAL_B]), ('40_int8', [DEPLOY, INT8])]:
     json.dump(nb(cells), open(f'notebooks/{name}.ipynb', 'w'), ensure_ascii=False, indent=1)
     print('đã tạo notebooks/' + name + '.ipynb')
+    
+    
