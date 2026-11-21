@@ -9,8 +9,17 @@ p.add_argument("--name", required=True); p.add_argument("--arch", default="fsnet
 p.add_argument("--epochs", type=int, default=60); p.add_argument("--bs", type=int, default=32)
 p.add_argument("--lr", type=float, default=1e-3); p.add_argument("--dice", type=float, default=0.5)
 p.add_argument("--seed", type=int, default=0); p.add_argument("--aug", default="strong")
-p.add_argument("--b9", default="", help="ví dụ shard_000,shard_001")
+p.add_argument("--b9", default="", help="ví dụ shard_000,shard_001 (chỉ có ở 320x160)")
+p.add_argument("--w", type=int, default=320); p.add_argument("--h", type=int, default=160)
+p.add_argument("--full_w", type=float, default=1.0,
+               help="khác 1: lấy mẫu có trọng số 1 + (full_w - 1) * is_full (is_full = ảnh có nhãn đủ 4 lớp)")
 a = p.parse_args(); C = 4
+assert not a.b9 or (a.w, a.h) == (320, 160), "shard b9 chỉ có ở 320x160: không dùng --b9 với cỡ khác"
+sys.path.insert(0, f"{DRV}/repo"); import models_custom, aug_strong
+_pc = models_custom.PRESETS[a.arch]; _need = 2 ** (4 + _pc.get("pre", 0) + (1 if _pc.get("e5") else 0))
+assert a.w % _need == 0 and a.h % _need == 0, f"{a.arch} cần w, h chia hết cho {_need}, nhận {a.w}x{a.h}"
+SZ = f"{a.w}x{a.h}"; HD = (a.w, a.h) != (320, 160)
+EB = max(1, min(64, int(3.3e6 // (a.w * a.h))))     # cỡ lô khi đánh giá (320x160 -> 64)
 RUN = f"{DRV}/runs/{a.name}"; os.makedirs(RUN, exist_ok=True)
 for f_ in (__file__, f"{DRV}/repo/models_custom.py"):
     d_ = f"{RUN}/code_{os.path.basename(f_)}"
@@ -23,20 +32,29 @@ def cp(src):
     return dst
 
 man = pd.read_csv(cp(f"{V2}/pilot_drv_manifest.csv"))
-PX = np.load(cp(f"{V2}/pilot_drv_x_320x160.npy"), mmap_mode="r"); PY = np.load(cp(f"{V2}/pilot_drv_y_320x160.npy"), mmap_mode="r")
+PX = np.load(cp(f"{V2}/pilot_drv_x_{SZ}.npy"), mmap_mode="r"); PY = np.load(cp(f"{V2}/pilot_drv_y_{SZ}.npy"), mmap_mode="r")
+assert len(PX) == len(PY) == len(man), f"cache {SZ} lệch manifest: {len(PX)}, {len(PY)}, {len(man)}"
 tr = np.where(man.split_v2.values == "train")[0]; te = np.where(man.split_v2.values == "test")[0]
-xs, ys, b9ids = [], [], set()
+xs, ys, isf, b9ids = [], [], [], set()
 for s in [t for t in a.b9.split(",") if t]:
-    b9ids |= set(pd.read_csv(f"{V2}/b9_chunks/{s}_ids.csv").id)
+    d_ = pd.read_csv(f"{V2}/b9_chunks/{s}_ids.csv"); b9ids |= set(d_.id)
     xs.append(np.load(cp(f"{V2}/b9_chunks/{s}_x.npy"))); ys.append(np.load(cp(f"{V2}/b9_chunks/{s}_y.npy")))
+    isf.append(d_.full_label.values.astype(bool)); assert len(isf[-1]) == len(xs[-1]), f"{s}: số dòng ids khác số ảnh"
 assert not (b9ids & set(man.id.values[te])), "ảnh test lọt vào dữ liệu huấn luyện"
 tr = np.array([i for i in tr if man.id.values[i] not in b9ids])      # ảnh thí điểm đã có trong b9 (đã mang nhãn đủ) thì không lặp
-xs.insert(0, np.asarray(PX[tr])); ys.insert(0, np.asarray(PY[tr]))
+xs.insert(0, np.asarray(PX[tr])); ys.insert(0, np.asarray(PY[tr])); isf.insert(0, np.ones(len(tr), bool))   # ảnh thí điểm: nhãn đủ
 Xt = torch.cat([torch.from_numpy(np.ascontiguousarray(x)) for x in xs]).to(dev)
 Yt = torch.cat([torch.from_numpy(np.ascontiguousarray(y)) for y in ys]).to(dev)
+IsFull = torch.from_numpy(np.concatenate(isf)).to(dev)
 Xe = torch.from_numpy(np.ascontiguousarray(PX[te])).to(dev); Ye = torch.from_numpy(np.ascontiguousarray(PY[te])).to(dev)
+if HD:   # nhãn 320x160 của đúng các ảnh test (cùng thứ tự manifest) để quy IoU về lưới chung
+    PY320 = np.load(cp(f"{V2}/pilot_drv_y_320x160.npy"), mmap_mode="r"); assert len(PY320) == len(man)
+    Ye320 = torch.from_numpy(np.ascontiguousarray(PY320[te])).to(dev)
 del xs, ys
-print(f"train {len(Xt)} ảnh (thí điểm {len(tr)} + b9 {len(Xt) - len(tr)}) | test {len(Xe)} | pixel nhãn 254: {(Yt == 254).float().mean().item():.1%}", flush=True)
+wts = 1.0 + (a.full_w - 1.0) * IsFull.float()
+n_full = int(IsFull.sum()); share = float((wts * IsFull.float()).sum() / wts.sum())
+print(f"train {len(Xt)} ảnh (thí điểm {len(tr)} + b9 {len(Xt) - len(tr)}) | cỡ {SZ} | test {len(Xe)} | pixel nhãn 254: {(Yt == 254).float().mean().item():.1%}", flush=True)
+print(f"ảnh nhãn đủ: {n_full}/{len(Xt)} ({n_full / len(Xt):.1%}) | full_w {a.full_w}: tỉ lệ mẫu nhãn đủ mỗi epoch {share:.1%}", flush=True)
 
 mean = torch.tensor([0.485, 0.456, 0.406], device=dev).view(1, 3, 1, 1) * 255
 std = torch.tensor([0.229, 0.224, 0.225], device=dev).view(1, 3, 1, 1) * 255
@@ -53,7 +71,6 @@ def augment_base(x, y, d_):
     b = torch.empty(n, 1, 1, 1, device=dev).uniform_(0.6, 1.4); c = torch.empty(n, 1, 1, 1, device=dev).uniform_(0.7, 1.3)
     m = x.mean((1, 2, 3), keepdim=True); x = ((x - m) * c + m) * b
     return x.clamp(0, 255), y
-sys.path.insert(0, f"{DRV}/repo"); import models_custom, aug_strong
 augment = aug_strong.augment if a.aug == "strong" else augment_base
 
 model = models_custom.build_fsnet(a.arch, num_classes=C).to(dev)
@@ -70,19 +87,28 @@ def lossf(o, y):
         l = l + (torch.logsumexp(o, 1) - torch.logsumexp(o[:, :2], 1))[m254].sum()
     return l / ((yy != 255) | m254).sum().clamp(min=1) + a.dice * dice(o, yy)
 
-@torch.no_grad()
-def evaluate():
-    model.eval(); conf = torch.zeros(C * C, dtype=torch.long, device=dev)
-    for i in range(0, len(Xe), 64):
-        x = (Xe[i:i + 64].permute(0, 3, 1, 2).float() - mean) / std; y = Ye[i:i + 64].long()
-        with torch.autocast("cuda", dtype=torch.float16): pr = model(x).argmax(1)
-        m = y != 255; conf += torch.bincount(y[m] * C + pr[m], minlength=C * C)
-    model.train()
+def summarize(conf):
     c = conf.cpu().numpy().astype(float).reshape(C, C)
     iou = [c[k, k] / (c[k].sum() + c[:, k].sum() - c[k, k] + 1e-9) for k in range(C)]
     tp, fp, fn, tn = c[1:, 1:].sum(), c[0, 1:].sum(), c[1:, 0].sum(), c[0, 0]
     return dict(miou=float(np.mean(iou)), iou=[float(v) for v in iou], road_iou=float(tp / (tp + fp + fn)),
                 nonroad_iou=float(tn / (tn + fp + fn)), false_floor=float(fp / (fp + tn)), conf=c)
+
+@torch.no_grad()
+def evaluate():
+    model.eval(); conf = torch.zeros(C * C, dtype=torch.long, device=dev); conf320 = torch.zeros_like(conf)
+    for i in range(0, len(Xe), EB):
+        x = (Xe[i:i + EB].permute(0, 3, 1, 2).float() - mean) / std; y = Ye[i:i + EB].long()
+        with torch.autocast("cuda", dtype=torch.float16): pr = model(x).argmax(1)
+        m = y != 255; conf += torch.bincount(y[m] * C + pr[m], minlength=C * C)
+        if HD:   # argmax ở lưới HD, thu nhỏ nearest về 160x320, so với nhãn 320x160 của đúng ảnh test
+            p3 = F.interpolate(pr.unsqueeze(1).float(), size=(160, 320), mode="nearest").squeeze(1).long()
+            y3 = Ye320[i:i + EB].long(); m3 = y3 != 255
+            conf320 += torch.bincount(y3[m3] * C + p3[m3], minlength=C * C)
+    model.train()
+    out = summarize(conf)
+    if HD: out["at320"] = summarize(conf320)
+    return out
 
 def atomic_save(obj, path): torch.save(obj, path + ".tmp"); os.replace(path + ".tmp", path)
 start = 0
@@ -92,7 +118,8 @@ if os.path.exists(f"{RUN}/last.pt"):
     scaler.load_state_dict(ck["scaler"]); start = ck["epoch"]; print("tiếp tục từ epoch", start)
 for ep in range(start, a.epochs):
     t0 = time.time(); torch.manual_seed(a.seed + ep); model.train()
-    perm = torch.randperm(len(Xt), device=dev); tl = torch.zeros((), device=dev)
+    perm = (torch.multinomial(wts, spe * a.bs, replacement=True) if a.full_w != 1.0
+            else torch.randperm(len(Xt), device=dev)); tl = torch.zeros((), device=dev)
     for i in range(spe):
         idx = perm[i * a.bs:(i + 1) * a.bs]
         x, y = augment(Xt[idx].permute(0, 3, 1, 2).float(), Yt[idx].long(), dev); x = (x - mean) / std
@@ -103,9 +130,16 @@ for ep in range(start, a.epochs):
     m = evaluate()
     atomic_save({"model": model.state_dict(), "opt": opt.state_dict(), "sched": sched.state_dict(),
                  "scaler": scaler.state_dict(), "epoch": ep + 1}, f"{RUN}/last.pt")
-    print(f"ep {ep + 1}/{a.epochs} loss {tl.item() / spe:.4f} IoU {[round(v, 3) for v in m['iou']]} road {m['road_iou']:.4f} {time.time() - t0:.0f}s", flush=True)
+    extra = f" | IoU320 {[round(v, 3) for v in m['at320']['iou']]} road320 {m['at320']['road_iou']:.4f}" if HD else ""
+    print(f"ep {ep + 1}/{a.epochs} loss {tl.item() / spe:.4f} IoU {[round(v, 3) for v in m['iou']]} road {m['road_iou']:.4f}{extra} {time.time() - t0:.0f}s", flush=True)
 m = evaluate()
-json.dump(dict(name=a.name, classes=C, epochs=a.epochs, flip=1, seed=a.seed, aug=a.aug, b9=a.b9, n_train=len(Xt), n_test=len(Xe),
-               miou=m["miou"], iou=m["iou"], road_iou=m["road_iou"], nonroad_iou=m["nonroad_iou"], false_floor=m["false_floor"],
-               conf=m["conf"].tolist(), reported="epoch cuối"), open(f"{RUN}/final_metrics.json", "w"), indent=1)
+res = dict(name=a.name, classes=C, arch=a.arch, w=a.w, h=a.h, full_w=a.full_w, n_full=n_full, epochs=a.epochs, flip=1, seed=a.seed, aug=a.aug,
+           b9=a.b9, n_train=len(Xt), n_test=len(Xe),
+           miou=m["miou"], iou=m["iou"], road_iou=m["road_iou"], nonroad_iou=m["nonroad_iou"], false_floor=m["false_floor"],
+           conf=m["conf"].tolist(), reported="epoch cuối")      # iou: ở lưới của chính nó (a.w x a.h)
+if HD:                                                           # iou_320: argmax HD -> nearest về lưới 320x160
+    t3 = m["at320"]
+    res.update(iou_320=t3["iou"], miou_320=t3["miou"], road_iou_320=t3["road_iou"], nonroad_iou_320=t3["nonroad_iou"],
+               false_floor_320=t3["false_floor"], conf_320=t3["conf"].tolist())
+json.dump(res, open(f"{RUN}/final_metrics.json", "w"), indent=1)
 print("xong")

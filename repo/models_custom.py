@@ -26,6 +26,12 @@ PRESETS = {
     # e5, d0: them tang 1/32 (2 conv) + 1 conv decoder ve 1/16 (chieu cao/rong anh phai chia het cho 64 khi pre=1)
     "fsnet_m_p1": dict(e0=16, e1=32, e2=48, e3=96, e4=128, n1=1, n4=3, d1=48, d2=32, pre=1),
     "fsnet_m_p1s5": dict(e0=16, e1=32, e2=48, e3=96, e4=128, n1=1, n4=3, d1=48, d2=32, pre=1, e5=128, d0=128),
+    # Nang cap (Phase 2 thi nghiem): sau hon o 1/16 (n4=5)
+    "fsnet_m_deep": dict(e0=16, e1=32, e2=48, e3=96, e4=128, n1=1, n4=5, d1=48, d2=32),
+    # Them tang 1/32 (anh vao phai chia het cho 32), khong ha mau som
+    "fsnet_m_ctx": dict(e0=16, e1=32, e2=48, e3=96, e4=128, n1=1, n4=3, d1=48, d2=32, e5=128, d0=128),
+    # Rong hon o moi tang tu 1/2 tro xuong
+    "fsnet_l": dict(e0=16, e1=48, e2=64, e3=128, e4=192, n1=1, n4=3, d1=64, d2=48),
 }
 
 
