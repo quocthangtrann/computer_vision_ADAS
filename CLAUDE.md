@@ -45,6 +45,17 @@ radar trước (trên camera), 4 siêu âm. Hợp nhất cảm biến ở tầng
 - `final_metrics.json`: `iou` tính ở lưới của chính run (`w` x `h`); run HD có thêm `iou_320` (argmax HD, thu nhỏ nearest về lưới 320x160, so nhãn 320x160).
   Chỉ `iou_320` so thẳng được với mốc 320x160.
 
+## Quyết định chốt (2026-11-23)
+- **A là mô hình chính**: `b9s4_c4aug_s0` (FSNet-M, 320x160, 4 shard, aug mạnh, epoch 60). Đã có INT8 (gói `handoff_s3b`). Trọng số chốt: `models_final/A_b9s4_fsnet_m_320x160_s0_weights.pt`.
+- **B là ứng viên thứ hai**: `hd640s1_p1s5_kdT_c4aug_s0` (`fsnet_m_p1s5`, 640x320, 1 shard, gói chống quá khớp + chưng cất từ MiT-B2, epoch 60). Trọng số: `models_final/B_hd640_p1s5_kdT_s0_weights.pt`.
+  Chưa nhận B vì làn đang đi chỉ hơn A +0,0068 (0,8100 ± 0,0041 so với 0,8032 ± 0,0028, 3 seed mỗi bên, t = 2,4): chưa đạt ngưỡng +0,01 và t >= 3 đã đặt trước. Các chỉ số khác nghiêng về B
+  (làn kề +0,024, không thuộc ta +0,048, IoU đường +0,023, false_floor 0,0128 so với 0,0167) nhưng ngưỡng đặt trước chỉ tính theo làn đang đi nên giữ nguyên quyết định.
+  Điều kiện còn thiếu: TV2 xác nhận ngân sách (B 0,725 GMAC ở 640x320, tensor lớn nhất khoảng 3,1 MiB; A 0,585 GMAC, 800 KiB). Bảng số đầy đủ: `docs/results_2026-11-23.md`.
+- A và B khác nhau nhiều yếu tố cùng lúc (số shard, cỡ ảnh, mạng, gói chống quá khớp, chưng cất): chưa tách được yếu tố nào. Chưa chạy `p1s5` không chống quá khớp ở `hd640s1`, giáo viên `unetr34` và nhóm `kdC`,
+  nên chưa kết luận được "transformer giúp". Giáo viên MiT-B2 (`models_final/teacher_mitb2_hd640_weights.pt`, 1 seed, chỉ bộ thí điểm) chỉ dùng lúc huấn luyện, không lên board.
+- Chưa đặt ngưỡng độ trễ (ví dụ 100 ms mỗi khung): chưa chốt, không dùng làm tiêu chí.
+- `models_final/`, `results/`, `context_pack/` là kết quả và trọng số: KHÔNG commit. `docs/` chỉ chứa bảng số tổng hợp dạng chữ nhỏ.
+
 ## Đang mở
 - ƯU TIÊN HIỆN TẠI: huấn luyện ở độ phân giải cao (640x320; 1280x576 chỉ cho bộ thí điểm), KHÔNG chạy thêm run 320x160 chất lượng thấp.
   Hàng đợi 320x160 trong `60_queue` (nhóm b, c, d) bị hạ ưu tiên; nhóm a của `60_queue` (HD thí điểm không giáo viên) cũng được `70_hd` thay thế.
@@ -61,9 +72,14 @@ radar trước (trên camera), 4 siêu âm. Hợp nhất cảm biến ở tầng
 - Quyết định đặt trước: giáo viên phải hơn mốc FSNet cùng dữ liệu >= 0,01 ở làn đang đi thì mới chưng cất; nhận học trò mới chỉ khi làn đang đi tăng >= 0,01 so với mốc (t >= 3),
   IoU đường và false_floor không xấu đi, và TV2 xác nhận ngân sách. KD từ transformer chỉ được coi là "transformer giúp" nếu hơn KD từ conv (`kdT` so với `kdC`).
 - Preset trong `models_custom.py`: `fsnet_m_deep`, `fsnet_m_ctx`, `fsnet_l`, `fsnet_l_p1`, `fsnet_l_p1s5` (đạt `contract_violations` rỗng).
-- CHƯA chạy trên GPU (mới kiểm bằng dữ liệu giả trên CPU): toàn bộ `train_v3.py` mới, `make_hd_pilot.py`, `b9_prepare_v2.py` ở cỡ HD, giáo viên MiT-B2, các hàng đợi `60_queue` và `70_hd`.
-  Chưa kiểm: tải trọng số ImageNet cho `smp` (cần mạng trên Colab), bộ nhớ GPU của giáo viên ở 640x320 và 1280x576, thời gian mỗi epoch, dung lượng đĩa Colab (shard 640x320 khoảng 6 GB mỗi shard, chép về đĩa cục bộ).
-  Shard 1280x576 khoảng 22 GB mỗi shard: chưa dùng.
-- `make_notebook.py` đã lệch với `10_data.ipynb` và `20_train.ipynb` (Colab đã sửa tay: `N_SHARDS = 4`, cell dọn tiến trình): sinh lại sẽ ghi đè. Cần đồng bộ trước khi sinh lại hai notebook đó.
+- Đã chạy trên GPU L4 24 GB (Colab, 2026-11-22/23): `train_v3.py` mới, `make_hd_pilot.py` (kiểm chứng 320x160 ĐẠT), `b9_prepare_v2.py` ở 640x320 (đã có `shard_000`, `shard_001`), giáo viên MiT-B2
+  (tải được trọng số ImageNet cho `smp`), học trò có chưng cất. Đo được ở 640x320: giáo viên 70 đến 74 s/epoch (bộ thí điểm, bs 8, accum 2); học trò thí điểm khoảng 10 s/epoch;
+  học trò +1 shard (10.200 ảnh, đọc từ đĩa) 44 s/epoch, 133 s/epoch khi có KD. Chưa đo/chưa chạy: 1280x576, giáo viên `unetr34`, nhóm `kdC`, `lp1s5_kdT`, 4 shard 640x320 (dung lượng đĩa chưa kiểm).
+- Bộ công cụ INT8 (`int8_sim.py`, `int8_pack.py`, `int8_ref.py`, `make_hd_calib.py`) nhận `--arch --w --h` (mặc định `fsnet_m`, 320, 160) và `--weights` (state_dict ở `models_final/`) thay cho `--run`.
+  Bước FP32 phải khớp `final_metrics.json` của run trong 0,002, hơn thì dừng. Kiểm bằng dữ liệu giả trên CPU: ở 320x160 cho kết quả trùng từng byte với bản trước (ONNX, trọng số INT8, golden, logit test);
+  ở 640x320 `int8_ref.py` trùng từng bit với mô phỏng. CHƯA chạy trên dữ liệu thật ở HD (cần Colab). `conv_exact` trong `int8_sim.py` thay `F.conv2d` float64 vì torch 2.2.2 từng trả kết quả sai.
+  sha256 byte của ONNX phụ thuộc phiên bản torch/onnx: so với gói cũ bằng `python repo/int8_sim.py --fingerprint tệp.onnx` (dấu vân tay trọng số).
+- `make_notebook.py` đã lệch với `10_data.ipynb`, `20_train.ipynb` và `70_hd.ipynb` (Colab đã sửa tay: `N_SHARDS = 4`, cell dọn tiến trình; `70_hd` có 15 cell, thêm cell chạy nền tải shard,
+  cell đóng băng `models_final/`): sinh lại sẽ ghi đè. Cần đồng bộ trước khi sinh lại các notebook đó; khi sinh lại, chỉ giữ notebook cần đổi (`git checkout` các notebook còn lại).
 - Chờ TV2: ngân sách IP và bộ nhớ, đệm kênh, Y6 chi tiết, hàm resize, độ phân giải đầu vào (E3).
 - Chưa làm: hiệu chuẩn webcam (S4), hậu xử lý làn và `PerceptionResult` (S5), hợp đồng gói kết quả (S0).

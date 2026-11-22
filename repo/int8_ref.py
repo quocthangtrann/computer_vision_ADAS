@@ -45,9 +45,16 @@ if __name__ == '__main__':
     gold = np.load(os.path.join(HERE, 'golden_int8.npz'))
     lg = np.load(os.path.join(HERE, 'test_int8_logits_quarter.npy'))
     ks = sorted(int(k[1:]) for k in gold.files if k.startswith('x'))
+    # co vao/ra doc tu int8_meta.json (khong viet cung 320x160); tep tham chieu phai khop voi co do (chi dung ASCII, de chay duoc moi noi)
+    in_shape, out_shape = tuple(meta['input']['shape']), tuple(meta['output']['shape'])
+    print(f'co vao (n,c,h,w) = {in_shape} | co ra = {out_shape}')
+    assert lg.shape[1:] == out_shape[1:], f'test_int8_logits_quarter.npy co co {lg.shape[1:]}, int8_meta.json ghi {out_shape[1:]}'
+    for k in ks:
+        assert gold[f'x{k}'].shape == in_shape[1:] or gold[f'x{k}'].shape == in_shape, f'golden x{k} co co {gold[f"x{k}"].shape}, int8_meta.json ghi {in_shape}'
     bad = n = 0
     for k in ks:
         T = run(model, meta, gold[f'x{k}'])
+        assert T[meta['output']['name']].shape[1:] == out_shape[1:], (T[meta['output']['name']].shape, out_shape)
         for op in meta['ops']:
             if op['op'] == 'conv':
                 d = int((T[op['out']].astype(np.int8) != gold[f'y{k}_{op["idx"]}']).sum())

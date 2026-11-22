@@ -60,9 +60,27 @@ for c in ['road', 'ff', 'notours', 'ego', 'adj']:
     print(f'{c:8s} cơ sở {A[c].mean():.4f} ± {A[c].std():.4f} | thêm b9 {B[c].mean():.4f} ± {B[c].std():.4f} | hiệu {d:+.4f} (t = {d / se:+.1f})')
 """
 
-INT8 = r"""RUN, OUT = 'runs/b9s4_c4aug_s0', 'handoff_s3b'   # đổi RUN khi lượng tử mô hình khác
-!python -u repo/int8_sim.py --run {RUN} --out {OUT} 2>&1 | tee -a runs/int8_sim.log
-!python -u repo/int8_pack.py --run {RUN} --out {OUT} 2>&1 | tee -a runs/int8_pack.log
+INT8 = r"""import os, subprocess, sys
+os.makedirs('runs', exist_ok=True)
+# CẤU HÌNH. A (mặc định): FSNet-M 320x160, run b9s4_c4aug_s0.  B (HD): W, H, ARCH = 640, 320, 'fsnet_m_p1s5', RUN = 'runs/hd640s1_p1s5_kdT_c4aug_s0'
+W, H, ARCH = 320, 160, 'fsnet_m'
+RUN = 'runs/b9s4_c4aug_s0'      # last.pt["model"] là trọng số triển khai (bản EMA nếu run bật EMA); trùng với tệp trong models_final/
+OUT = 'handoff_s3b' if (W, H) == (320, 160) else f'handoff_s3b_{ARCH}_{W}x{H}'   # gói HD ghi ra thư mục khác, không đè gói 320x160
+SZ = ['--arch', ARCH, '--w', str(W), '--h', str(H)]
+
+def run(script, *args):
+    cmd = [sys.executable, '-u', f'repo/{script}', *args]
+    print('>>>', ' '.join(cmd), flush=True)
+    pr = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    with open(f'runs/{script[:-3]}.log', 'a') as lg:
+        for ln in pr.stdout:
+            lg.write(ln); print(ln, end='', flush=True)
+    if pr.wait() != 0: raise SystemExit(f'{script} dừng (mã thoát {pr.returncode}): dán đoạn log trên cho tôi, KHÔNG chạy bước sau')
+
+# Chạy được trên runtime CPU. Bước FP32 của int8_sim so ONNX với final_metrics.json của run: lệch quá 0,002 thì dừng.
+if (W, H) != (320, 160): run('make_hd_calib.py', '--w', str(W), '--h', str(H))   # 200 ảnh hiệu chuẩn + 100 ảnh test HD; có rồi thì bỏ qua
+run('int8_sim.py', '--run', RUN, '--out', OUT, *SZ)
+run('int8_pack.py', '--run', RUN, '--out', OUT, *SZ)
 """
 
 Q_CACHE = r"""import os, subprocess, sys
