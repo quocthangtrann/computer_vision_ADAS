@@ -32,6 +32,9 @@ PRESETS = {
     "fsnet_m_ctx": dict(e0=16, e1=32, e2=48, e3=96, e4=128, n1=1, n4=3, d1=48, d2=32, e5=128, d0=128),
     # Rong hon o moi tang tu 1/2 tro xuong
     "fsnet_l": dict(e0=16, e1=48, e2=64, e3=128, e4=192, n1=1, n4=3, d1=64, d2=48),
+    # Cho anh phan giai cao (640x320, 1280x576): ha mau som (pre=1) de giu MAC vua phai, dau ra 1/8 anh vao.
+    "fsnet_l_p1": dict(e0=16, e1=48, e2=64, e3=128, e4=192, n1=1, n4=3, d1=64, d2=48, pre=1),
+    "fsnet_l_p1s5": dict(e0=16, e1=48, e2=64, e3=128, e4=192, n1=1, n4=3, d1=64, d2=48, pre=1, e5=192, d0=192),
 }
 
 

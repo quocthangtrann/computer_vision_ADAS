@@ -40,19 +40,30 @@ radar trước (trên camera), 4 siêu âm. Hợp nhất cảm biến ở tầng
 - Run cũ KHÔNG đổi tên (`pilot_c4_*`, `pilot_c4aug_*`, `b9s1_c4aug_*`, `b9s4_c4aug_*`). Mốc của từng nhóm là run cũ cùng dữ liệu và cùng aug:
   HD so với `pilot_c4aug_s*` (5 seed); `_deep`, `_ctx` so với `b9s1_c4aug_s*` (5 seed); `_fw4`, `_wide` so với `b9s4_c4aug_s*` (3 seed).
   `pilot_c4_fsnet_m` là aug cơ bản, KHÔNG thuộc mốc `pilot_c4aug_s*`.
+- Tag HD (notebook `70_hd`): `hd{W}s{N}` (cỡ W, N shard; ví dụ `hd640s1`). Biến thể: `_mitb2`, `_unetr34` (giáo viên), `_p1s5`, `_p1s5_reg`, `_p1s5_kdT`, `_p1s5_kdC`, `_lp1s5_kdT` (học trò).
+  Mốc của `hd640s1_*` là `b9s1_c4aug_s*`, của `hd640s4_*` là `b9s4_c4aug_s*`, của `hd640s0_*` là `pilot_c4aug_s*` (so bằng `iou_320`).
 - `final_metrics.json`: `iou` tính ở lưới của chính run (`w` x `h`); run HD có thêm `iou_320` (argmax HD, thu nhỏ nearest về lưới 320x160, so nhãn 320x160).
   Chỉ `iou_320` so thẳng được với mốc 320x160.
 
 ## Đang mở
-- Thí nghiệm nâng cấp, chạy bằng `notebooks/60_queue.ipynb` (biến `ONLY` chọn nhóm). Preset mới trong `models_custom.py` (ở 320x160, 4 lớp):
-  `fsnet_m_deep` (n4=5) 0,644 GMAC; `fsnet_m_ctx` (thêm tầng 1/32, ảnh vào chia hết 32) 0,658 GMAC; `fsnet_l` (e1..e4 = 48, 64, 128, 192; d1, d2 = 64, 48) 1,092 GMAC;
-  `fsnet_m` là 0,585 GMAC. Cả ba đạt `contract_violations` rỗng.
-  Hàng đợi: (a) HD thí điểm 640x320, 3 seed: `fsnet_m_p1`, `fsnet_m_p1s5`, `fsnet_m` (GMAC ở 640x320: 0,651; 0,725; 2,339);
-  (b) `fsnet_m_deep` rồi `fsnet_m_ctx`, 1 shard, 3 seed; (c) `fsnet_m` 4 shard, `--full_w 4`, 3 seed; (d) `fsnet_l` 4 shard, CHỈ seed 0 (n = 1, không có t).
-  Chốt trước 25/11; chỉ nhận nếu làn đang đi tăng >= 0,01 (t >= 3), IoU đường và false_floor không xấu đi, và TV2 xác nhận ngân sách.
-  Nhóm (b) chạy ở 1 shard để sàng lọc: tiêu chí trên đặt cho 4 shard, nên kết quả (b) chưa đủ để nhận. Nhóm (d) cần thêm seed trước khi kết luận.
-- Chưa chạy trên GPU (mới kiểm bằng dữ liệu giả trên CPU): `train_v3.py` với `--w --h --full_w`, `make_hd_pilot.py`, hàng đợi 60_queue.
-  Bắt buộc trước khi dựng HD: `make_hd_pilot.py --w 320 --h 160` phải in "ĐẠT" (trùng 100% cache 320x160 có sẵn).
+- ƯU TIÊN HIỆN TẠI: huấn luyện ở độ phân giải cao (640x320; 1280x576 chỉ cho bộ thí điểm), KHÔNG chạy thêm run 320x160 chất lượng thấp.
+  Hàng đợi 320x160 trong `60_queue` (nhóm b, c, d) bị hạ ưu tiên; nhóm a của `60_queue` (HD thí điểm không giáo viên) cũng được `70_hd` thay thế.
+- Notebook `notebooks/70_hd.ipynb` (biến `W, H, NS` ở cell cấu hình; `ONLY` chọn nhóm). Trình tự: dựng cache thí điểm HD (kiểm chứng 320x160 phải ĐẠT) -> dựng shard HD
+  (`b9_prepare_v2.py --w --h`, ghi vào `data/v2/b9_chunks_{W}x{H}/`) -> giáo viên (nhóm t) -> học trò (s), chưng cất (k), học trò lớn (l) -> cell so sánh.
+  Giáo viên: `smp:Unet:mit_b2` (transformer, 27,5 M tham số) và đối chứng `smp:Unet:resnet34` (conv, 24,4 M). Học trò: `fsnet_m_p1s5` (0,725 GMAC ở 640x320),
+  `fsnet_l_p1s5` (1,324 GMAC ở 640x320; mới), lưới logit 80x40 (p1 giữ lưới logit bằng 320x160; muốn lưới mịn hơn dùng `fsnet_m`/`fsnet_l` không `pre`, 160x80).
+  Chỉ học trò là mạng chạy trên IP; giáo viên chỉ dùng lúc huấn luyện, không bị ràng buộc hợp đồng. Attention KHÔNG đưa vào mạng chạy trên IP.
+- Cờ mới của `train_v3.py` (mặc định tắt, run cũ chạy lại cho cùng kết quả: đã kiểm bằng dữ liệu giả): `--teacher --kd --kd_T` (KD tính cả trên pixel nhãn 254),
+  chống quá khớp `--ema --wd --wd_nobn --ls --cutout`, `--lr_enc_mult`, `--accum`, `--stream` (đọc lô từ đĩa; tự bật khi dữ liệu > 6 GB), `--arch smp:...`, `--pretrained`.
+  Gói chống quá khớp của học trò (`REG`): EMA 0,999, wd 0,01 không áp cho bias/BN, label smoothing 0,05, cutout 2 ô (nhãn giữ nguyên). Mọi giá trị CHƯA chỉnh, cần đo từng yếu tố.
+  Mỗi run ghi `iou_trainsub` (ảnh train nhãn đủ, không aug) để đo khoảng cách train - test thay vì giả định có quá khớp: FSNet-M 2 lớp trước đây KHÔNG quá khớp (train ~ val).
+  `last.pt["model"]` luôn là trọng số triển khai (bản EMA nếu bật); `int8_sim.py` đọc đúng khoá này.
+- Quyết định đặt trước: giáo viên phải hơn mốc FSNet cùng dữ liệu >= 0,01 ở làn đang đi thì mới chưng cất; nhận học trò mới chỉ khi làn đang đi tăng >= 0,01 so với mốc (t >= 3),
+  IoU đường và false_floor không xấu đi, và TV2 xác nhận ngân sách. KD từ transformer chỉ được coi là "transformer giúp" nếu hơn KD từ conv (`kdT` so với `kdC`).
+- Preset trong `models_custom.py`: `fsnet_m_deep`, `fsnet_m_ctx`, `fsnet_l`, `fsnet_l_p1`, `fsnet_l_p1s5` (đạt `contract_violations` rỗng).
+- CHƯA chạy trên GPU (mới kiểm bằng dữ liệu giả trên CPU): toàn bộ `train_v3.py` mới, `make_hd_pilot.py`, `b9_prepare_v2.py` ở cỡ HD, giáo viên MiT-B2, các hàng đợi `60_queue` và `70_hd`.
+  Chưa kiểm: tải trọng số ImageNet cho `smp` (cần mạng trên Colab), bộ nhớ GPU của giáo viên ở 640x320 và 1280x576, thời gian mỗi epoch, dung lượng đĩa Colab (shard 640x320 khoảng 6 GB mỗi shard, chép về đĩa cục bộ).
+  Shard 1280x576 khoảng 22 GB mỗi shard: chưa dùng.
 - `make_notebook.py` đã lệch với `10_data.ipynb` và `20_train.ipynb` (Colab đã sửa tay: `N_SHARDS = 4`, cell dọn tiến trình): sinh lại sẽ ghi đè. Cần đồng bộ trước khi sinh lại hai notebook đó.
 - Chờ TV2: ngân sách IP và bộ nhớ, đệm kênh, Y6 chi tiết, hàm resize, độ phân giải đầu vào (E3).
 - Chưa làm: hiệu chuẩn webcam (S4), hậu xử lý làn và `PerceptionResult` (S5), hợp đồng gói kết quả (S0).
