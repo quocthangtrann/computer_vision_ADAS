@@ -6,3 +6,10 @@
 __pycache__/
 *.bak*
 .DS_Store
+# kết quả và trọng số nằm trên Drive, không commit
+context_pack/
+models_final/
+results/
+eval_runtime/
+*.onnx
+*.npz

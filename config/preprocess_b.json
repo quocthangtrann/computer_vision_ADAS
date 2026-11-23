@@ -1,0 +1,13 @@
+{
+ "_comment": "Tiền xử lý cho mô hình B (fsnet_m_p1s5, 640x320). Mặc định = quy tắc lúc huấn luyện (make_hd_pilot.py). int8_meta tính từ --root.",
+ "frame_wh": [1280, 720],
+ "crop_ltrb": [0, 0, 1280, 600],
+ "out_wh": [640, 320],
+ "resize": "pil_bilinear",
+ "mean": [123.675, 116.28, 103.53],
+ "std": [58.395, 57.12, 57.375],
+ "int8_meta": "handoff_s3b_fsnet_m_p1s5_640x320/int8_meta.json",
+ "input_scale": null,
+ "frame_color": "RGB",
+ "on_size_mismatch": "scale_crop"
+}
