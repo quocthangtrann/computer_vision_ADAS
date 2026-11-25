@@ -12,6 +12,10 @@ try:
     from PIL import Image
 except ImportError:
     Image = None
+try:
+    import cv2
+except ImportError:
+    cv2 = None
 
 MEAN = [123.675, 116.28, 103.53]
 STD = [58.395, 57.12, 57.375]
@@ -66,6 +70,31 @@ class PreprocessTest(unittest.TestCase):
         finally:
             rp._cv2 = saved
         np.testing.assert_array_equal(pre.to_float(img), xf)
+
+    @unittest.skipIf(cv2 is None, 'không có OpenCV')
+    def test_cv2_fast_path_equals_direct_resize(self):
+        f = frame(np.random.default_rng(7))
+        for method, flag in (('cv2_linear', cv2.INTER_LINEAR), ('cv2_area', cv2.INTER_AREA)):
+            pre = Preprocessor(dict(CFG, resize=method))
+            p = pre(f)
+            ref = cv2.resize(np.ascontiguousarray(f[:600, :1280]), (640, 320), interpolation=flag)       # RGB trong, RGB ra
+            np.testing.assert_array_equal(p.image, ref, method)
+            np.testing.assert_array_equal(p.x_int8, pre.quantize(ref), method)
+            b = pre(np.ascontiguousarray(f[:, :, ::-1]), color='BGR')                                    # BGR vào cho cùng kết quả
+            np.testing.assert_array_equal(b.x_int8, p.x_int8, method)
+            self.assertEqual(p.chw.shape, (3, 320, 640))
+            self.assertTrue(p.chw.flags.c_contiguous and p.x_int8.flags.c_contiguous)
+            np.testing.assert_allclose(p.grid_to_frame, Preprocessor(CFG)(f).grid_to_frame)           # cùng ma trận tọa độ với bản PIL
+        small = Preprocessor(dict(CFG, resize='cv2_linear'))(frame(np.random.default_rng(8), 640, 360))   # khung khác cỡ: vùng cắt co theo
+        self.assertEqual(small.crop_ltrb, (0, 0, 640, 300))
+        self.assertEqual(small.x_int8.shape, (1, 3, 320, 640))
+
+    @unittest.skipIf(cv2 is None or Image is None, 'cần OpenCV và PIL')
+    def test_cv2_linear_differs_from_training_resize(self):
+        """cv2_linear KHÔNG khử răng cưa như PIL: ảnh khác ảnh lúc huấn luyện. Test này khóa sự thật đó (không phải lỗi)."""
+        f = frame(np.random.default_rng(9))
+        a, b = Preprocessor(CFG)(f).image, Preprocessor(dict(CFG, resize='cv2_linear'))(f).image
+        self.assertGreater(int((a != b).any(-1).sum()), 0)
 
     def test_bgr_and_size_mismatch(self):
         pre = Preprocessor(dict(CFG, resize='pil_bilinear'))

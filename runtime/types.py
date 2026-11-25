@@ -34,7 +34,7 @@ PKT_HAS_LOGITS = 1
 PKT_HAS_MASK = 2
 PKT_TIER3_CALIBRATED = 4
 PKT_DRIVABLE_CLASS1 = 8    # "đi được" của tầng 2 có tính cả lớp 1 (đường không thuộc ta)
-PKT_FAST_POST = 16         # tầng 2 tính trên lưới logit (bản nhanh), không phải lưới ảnh vào
+PKT_FAST_POST = 16         # hậu xử lý không phải bản chuẩn (fast, half hoặc quarter): tầng 2 tính trên lưới thưa hơn lưới ảnh vào
 
 MAGIC = b'PERC'
 VERSION = 0

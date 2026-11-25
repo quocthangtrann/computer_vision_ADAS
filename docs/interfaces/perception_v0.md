@@ -46,6 +46,10 @@ Hàng k (k = 0 là hàng gần xe nhất, đi dần ra xa). Mặc định các h
 
 **Giá trị không hợp lệ là NaN. Luôn đọc cờ trước khi dùng giá trị.**
 
+Chế độ hậu xử lý (`runtime/postprocess.py`): `standard` (bilinear lên lưới ảnh vào rồi chọn lớp), `fast` (chọn lớp ở lưới logit rồi lặp pixel), `half` và `quarter` (bilinear tới lưới ảnh vào chia 2 hoặc chia 4).
+Mọi chế độ đều xuất tọa độ tầng 2 bằng pixel khung; chế độ thưa chỉ khác sai số lấy mẫu (khoảng 4 hoặc 8 pixel khung theo chiều ngang) và kích thước mặt nạ tầng 1 (header `grid_w`, `grid_h`).
+Chế độ nào dùng thật còn chờ số đo trên ảnh thật (`30_eval`).
+
 Tham số mặc định (32 cột, 8 hàng, 60% đến 98%, `merge_max_gap_frac` 0,5) nằm ở `config/pipeline_b.json` và **chưa chỉnh trên ảnh webcam thật**.
 
 ### Tầng 3 (dự kiến, chưa có số)
@@ -68,11 +72,11 @@ Mỗi khối được đệm cho độ dài chia hết cho 4.
 | 8 | 4 | seq | u32 | số thứ tự khung, tăng 1 mỗi khung |
 | 12 | 8 | t_capture_ns | u64 | lúc chụp khung (`CLOCK_MONOTONIC`, ns) do nơi gọi truyền vào; không truyền thì là lúc bắt đầu xử lý |
 | 20 | 8 | t_publish_ns | u64 | lúc đóng gói (`CLOCK_MONOTONIC`, ns) |
-| 28 | 4 | flags | u32 | bit 0 có tầng 0; bit 1 có tầng 1; bit 2 tầng 3 đã hiệu chuẩn; bit 3 "đi được" tính cả lớp 1; bit 4 hậu xử lý bản nhanh |
+| 28 | 4 | flags | u32 | bit 0 có tầng 0; bit 1 có tầng 1; bit 2 tầng 3 đã hiệu chuẩn; bit 3 "đi được" tính cả lớp 1; bit 4 hậu xử lý KHÔNG phải bản chuẩn (`fast`, `half` hoặc `quarter`: tầng 2 tính trên lưới thưa hơn) |
 | 32 | 2 | frame_w | u16 | khung camera, B: 1280 |
 | 34 | 2 | frame_h | u16 | B: 720 |
-| 36 | 2 | grid_w | u16 | lưới dùng để tính tầng 2, B: 640 |
-| 38 | 2 | grid_h | u16 | B: 320 |
+| 36 | 2 | grid_w | u16 | lưới dùng để tính tầng 2 (cũng là cỡ mặt nạ tầng 1), B: 640 ở bản chuẩn; `half` 320, `quarter` 160 |
+| 38 | 2 | grid_h | u16 | B: 320 ở bản chuẩn; `half` 160, `quarter` 80 |
 | 40 | 2 | n_cols | u16 | N |
 | 42 | 2 | n_rows | u16 | M |
 | 44 | 16 | model | char[16] | ASCII, đệm 0, ví dụ `fsnet_m_p1s5` |
@@ -109,4 +113,5 @@ Tổng quát: `80 + 8·(2N + 4M) + 2(N + M) + đệm + 4`.
 - Kênh truyền tới TV3 (UDP, UART hay bộ nhớ chung) và tần số khung: chưa chốt. Với UART, gói 932 byte ở 921.600 baud mất khoảng 10 ms.
 - Đồng hồ chung cho `t_capture_ns` giữa camera, radar và siêu âm: chưa chốt.
 - Tầng 3: chờ S4 (hiệu chuẩn webcam, homography mặt đất).
+- Chế độ hậu xử lý và cách resize mặc định: chưa chọn, chờ `30_eval` cell 4 (tiêu chí đặt trước ghi trong `CLAUDE.md`). Gói phải khai báo chế độ qua cờ bit 4 và `grid_w`, `grid_h`.
 - Ngưỡng độ trễ: chưa đặt. Thời gian từng khâu trên A53 chưa đo; số đo trên CPU Colab hoặc PC không đại diện cho board.

@@ -7,9 +7,9 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from runtime import types as T                                              # noqa: E402
-from runtime.postprocess import (fast_deviation, mask_fast, mask_standard,   # noqa: E402
-                                 nearest_resize, upsample_bilinear)
-from runtime.preprocess import grid_to_frame                                 # noqa: E402
+from runtime.postprocess import (GRID_DIV, MODES, Postprocessor, fast_deviation, mask_fast,   # noqa: E402
+                                 mask_standard, nearest_resize, tier2_deviation, upsample_bilinear)
+from runtime.preprocess import apply, grid_to_frame                          # noqa: E402
 
 try:
     import torch
@@ -61,6 +61,66 @@ class PostprocessTest(unittest.TestCase):
         d = fast_deviation(lg, (320, 640), grid_to_frame((0, 0, 1280, 600), 640, 320))
         self.assertGreater(d['pixel_agree'], 0.5)
         self.assertIn('row_center_absdiff_px', d)
+
+
+def lane_logits():
+    """Logit trơn (float) có một làn lớp 2 ở giữa, bờ liên tục: nghiệm của f2 = 0 là cùng một đường cong ở mọi lưới phóng tới."""
+    y, x = np.mgrid[0:40, 0:80].astype(np.float32)
+    f = np.zeros((4, 40, 80), np.float32)
+    f[2] = np.minimum(3 - 0.5 * np.abs(x - 40), 0.4 * (y - 10))
+    return T.Logits(f=f)
+
+
+class GridModesTest(unittest.TestCase):
+    G2F = grid_to_frame((0, 0, 1280, 600), 640, 320)
+    HW = (320, 640)
+
+    def test_modes_registered(self):
+        self.assertEqual(set(MODES), {'standard', 'fast', 'half', 'quarter'})
+        with self.assertRaises(AssertionError):
+            Postprocessor({'mode': 'nua'})
+
+    def test_grid_matrix_is_that_of_the_coarse_grid(self):
+        lg = logits(np.random.default_rng(5))
+        for mode, d in GRID_DIV.items():
+            m, g2f = Postprocessor({'mode': mode}).mask(lg, self.HW, self.G2F)
+            self.assertEqual(m.shape, (320 // d, 640 // d))
+            np.testing.assert_allclose(g2f, grid_to_frame((0, 0, 1280, 600), 640 // d, 320 // d), atol=1e-9, err_msg=mode)
+            # tâm pixel (0, 0) của lưới thưa là tâm khối d x d của lưới ảnh vào
+            np.testing.assert_allclose(apply(g2f, 0, 0), apply(self.G2F, (d - 1) / 2, (d - 1) / 2), atol=1e-9)
+
+    @unittest.skipIf(torch is None, 'không có torch')
+    def test_coarse_masks_match_torch(self):
+        lg = logits(np.random.default_rng(6))
+        x = lg.as_float()
+        for mode, d in GRID_DIV.items():
+            m, _ = Postprocessor({'mode': mode}).mask(lg, self.HW, self.G2F)
+            ref = F.interpolate(torch.from_numpy(x[None]), size=(320 // d, 640 // d), mode='bilinear', align_corners=False).argmax(1)[0].numpy()
+            self.assertGreaterEqual(float((m == ref).mean()), 0.9999, mode)
+
+    def test_tier2_stays_close_to_standard(self):
+        lg = lane_logits()
+        res = {}
+        for mode in ('standard', 'half', 'quarter'):
+            ps = Postprocessor({'mode': mode})
+            m, g2f = ps.mask(lg, self.HW, self.G2F)
+            res[mode] = ps.tier2(m, g2f)
+        a = res['standard']
+        self.assertTrue((a.row_flags & T.ROW_CENTER > 0).sum() >= 5, 'mặt nạ thử phải có làn')
+        for mode, tol_x, tol_y in (('half', 12, 12), ('quarter', 20, 20)):     # pixel khung: 1 pixel lưới thưa = 4 hoặc 8 ngang, 3,75 hoặc 7,5 dọc
+            b = res[mode]
+            d = tier2_deviation(a, b)
+            self.assertEqual(d['row_center_valid_mismatch'], 0, mode)
+            self.assertEqual(d['col_valid_mismatch'], 0, mode)
+            self.assertLess(max(d['row_center_absdiff_px']), tol_x, mode)
+            self.assertLess(max(d['col_y_absdiff_px']), tol_y, mode)
+            np.testing.assert_array_equal(a.row_flags, b.row_flags)
+
+    def test_tier2_deviation_zero_for_same(self):
+        a = Postprocessor({}).tier2(*Postprocessor({}).mask(lane_logits(), self.HW, self.G2F))
+        d = tier2_deviation(a, a)
+        self.assertEqual(max(d['row_center_absdiff_px']), 0)
+        self.assertEqual(d['col_valid_mismatch'] + d['row_center_valid_mismatch'], 0)
 
 
 if __name__ == '__main__':

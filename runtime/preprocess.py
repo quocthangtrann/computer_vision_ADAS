@@ -277,6 +277,13 @@ class Preprocessor:
         if not (0 <= l < r <= w and 0 <= t < b <= h):
             raise ValueError(f'vùng cắt {crop} nằm ngoài khung {w}x{h}')
         img = frame[t:b, l:r]
-        x = np.ascontiguousarray((img[:, :, ::-1] if color == 'BGR' else img).transpose(2, 0, 1))     # (3, h, w) RGB
-        x = self.resize_chw(x)
+        if self.method != 'pil_bilinear' and _cv2 is not None and (r - l, b - t) != self.out_wh:
+            # Đường nhanh của OpenCV: resize thẳng trên khung HWC, đổi bố cục (HWC -> CHW, lật kênh nếu BGR) chỉ một lần ở ảnh ĐÃ NHỎ.
+            # Đường chung bên dưới chép ảnh cắt cỡ đầy đủ hai lần (HWC -> CHW -> HWC) trước khi resize. Cùng kết quả (kiểm ở tests/test_preprocess.py).
+            y = _cv2.resize(img if img.flags.c_contiguous else np.ascontiguousarray(img), self.out_wh,
+                            interpolation=_cv2.INTER_AREA if self.method == 'cv2_area' else _cv2.INTER_LINEAR)
+            x = np.ascontiguousarray((y[:, :, ::-1] if color == 'BGR' else y).transpose(2, 0, 1))
+        else:
+            x = np.ascontiguousarray((img[:, :, ::-1] if color == 'BGR' else img).transpose(2, 0, 1))     # (3, h, w) RGB
+            x = self.resize_chw(x)
         return Prepared(self.quantize_chw(x), x, grid_to_frame(crop, *self.out_wh), crop, (w, h), scaled)

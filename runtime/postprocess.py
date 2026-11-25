@@ -7,6 +7,10 @@ Bản chuẩn (mode "standard"), khớp cách train_v3.py / int8_sim.py đánh g
 Bản nhanh (mode "fast"): argmax thẳng trên lưới logit (B: 40 x 80) bằng số nguyên, không phóng bilinear; mặt nạ lặp pixel
   (nearest) lên lưới ảnh vào để tầng 2 lấy mẫu đúng các hàng, cột như bản chuẩn.
   fast_deviation() báo mức lệch (pixel mặt nạ và tọa độ tầng 2) so với bản chuẩn.
+Lưới thưa (mode "half", "quarter"): cùng phép bilinear + argmax như bản chuẩn nhưng chỉ phóng tới lưới ảnh vào chia 2 (B: 160 x 320)
+  hoặc chia 4 (B: 80 x 160): ít pixel hơn 4 lần hoặc 16 lần. Tầng 2 tính ngay trên lưới thưa với ma trận lưới -> khung của lưới đó,
+  nên tọa độ vẫn là pixel khung; sai số lấy mẫu tối đa một pixel của lưới thưa (B: khoảng 4 hoặc 8 pixel khung theo chiều ngang).
+  Độ lệch so với bản chuẩn đo bằng tier2_deviation(); mức chấp nhận do người dùng đặt (xem runtime/eval_dataset.py).
 
 Tầng 2 (compute_tier2):
   - N cột cách đều trên lưới (tâm cột i ở x = (i + 0.5) * W / N). Mỗi cột: đếm từ hàng đáy lên các pixel "đi được" LIÊN TỤC
@@ -178,27 +182,37 @@ def compute_tier2(mask, g2f, cfg: Tier2Config = None) -> T.Tier2:
                    ry.astype(np.float32), f(rl).astype(np.float32), f(rr).astype(np.float32), f(rc).astype(np.float32), rf)
 
 
+GRID_DIV = {'half': 2, 'quarter': 4}          # chế độ lưới thưa -> hệ số chia lưới ảnh vào
+MODES = ('standard', 'fast') + tuple(GRID_DIV)
+
+
 class Postprocessor:
     def __init__(self, cfg=None):
         cfg = dict(cfg or {})
         self.mode = cfg.pop('mode', 'standard')
-        assert self.mode in ('standard', 'fast'), self.mode
+        assert self.mode in MODES, self.mode
         self.t2 = Tier2Config.from_dict(cfg)
 
     def mask(self, logits, net_hw, g2f_net):
-        """Trả về (mặt nạ ở lưới ảnh vào của mạng, ma trận lưới -> khung). Bản nhanh: argmax ở lưới logit rồi phóng nearest
-        (lặp pixel), nên tầng 2 lấy mẫu đúng các hàng, cột như bản chuẩn."""
+        """Trả về (mặt nạ, ma trận lưới của mặt nạ -> khung).
+        standard: bilinear + argmax ở lưới ảnh vào của mạng. fast: argmax ở lưới logit rồi phóng nearest (lặp pixel) lên lưới ảnh vào,
+        nên tầng 2 lấy mẫu đúng các hàng, cột như bản chuẩn. half, quarter: bilinear + argmax ở lưới ảnh vào chia 2 hoặc chia 4."""
         H, W = net_hw
         if self.mode == 'standard':
             return mask_standard(logits, H, W), g2f_net
-        return nearest_resize(mask_fast(logits), H, W), g2f_net
+        if self.mode == 'fast':
+            return nearest_resize(mask_fast(logits), H, W), g2f_net
+        d = GRID_DIV[self.mode]
+        assert H % d == 0 and W % d == 0, f'lưới {W}x{H} không chia hết cho {d}'
+        h, w = H // d, W // d
+        return mask_standard(logits, h, w), logit_grid_to_frame(g2f_net, net_hw, (h, w))
 
     def tier2(self, mask, g2f):
         return compute_tier2(mask, g2f, self.t2)
 
 
 def logit_grid_to_frame(g2f_net, net_hw, logit_hw):
-    """Ma trận lưới logit -> khung, từ ma trận lưới ảnh vào -> khung (lưới logit phủ đúng cùng vùng)."""
+    """Ma trận lưới (h, w) bất kỳ phủ cùng vùng cắt -> khung, từ ma trận lưới ảnh vào -> khung. Dùng cho lưới logit và lưới thưa."""
     H, W = net_hw
     h, w = logit_hw
     s_x, s_y = W / w, H / h
@@ -215,9 +229,14 @@ def fast_deviation(logits, net_hw, g2f_net, cfg: Tier2Config = None):
     ms = mask_standard(logits, H, W)
     mf = nearest_resize(mask_fast(logits), H, W)
     agree = float((mf == ms).mean())
-    a = compute_tier2(ms, g2f_net, cfg)
-    b = compute_tier2(mf, g2f_net, cfg)
     out = dict(pixel_agree=agree)
+    out.update(tier2_deviation(compute_tier2(ms, g2f_net, cfg), compute_tier2(mf, g2f_net, cfg)))
+    return out
+
+
+def tier2_deviation(a: T.Tier2, b: T.Tier2):
+    """Độ lệch tầng 2 giữa hai kết quả (pixel khung) ở những phần tử hợp lệ cả hai bên, và số phần tử hợp lệ ở bên này mà không ở bên kia."""
+    out = {}
     v = (a.col_flags & T.COL_VALID) & (b.col_flags & T.COL_VALID) > 0
     out['col_y_absdiff_px'] = np.abs(a.col_y - b.col_y)[v].tolist()
     out['col_valid_mismatch'] = int(((a.col_flags & T.COL_VALID) != (b.col_flags & T.COL_VALID)).sum())

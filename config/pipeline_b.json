@@ -1,7 +1,7 @@
 {
- "_comment": "Pipeline cho mô hình B. pack_dir tính từ --root; preprocess tính từ thư mục của tệp này. Tham số tầng 2 CHƯA chỉnh trên ảnh webcam thật.",
+ "_comment": "Pipeline cho B2 (hd640s4_p1s5_kdT, 4 shard), MÔ HÌNH CHÍNH từ 2026-11-25. pack_dir tính từ --root; preprocess tính từ thư mục của tệp này. Tham số tầng 2 CHƯA chỉnh trên ảnh webcam thật.",
  "model_name": "fsnet_m_p1s5",
- "pack_dir": "handoff_s3b_fsnet_m_p1s5_640x320",
+ "pack_dir": "handoff_s3b_fsnet_m_p1s5_640x320_s4",
  "preprocess": "preprocess_b.json",
  "backend": {
   "name": "int8ref",

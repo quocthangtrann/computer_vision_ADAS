@@ -154,7 +154,7 @@ EPOCHS = 60
 BUDGET_MIN = None        # số phút: không bắt đầu run mới sau mức này (phiên Colab có giới hạn); None = không giới hạn
 W, H, ARCH = 640, 320, 'fsnet_m_p1s5'
 TEACHER = 'hd640s0_mitb2_c4aug_s0'
-BASE = 'hd640s1_p1s5_kdT_c4aug_s*'       # B hiện tại (3 seed), mốc so sánh
+BASE = 'hd640s1_p1s5_kdT_c4aug_s*'       # B (dự phòng, 3 seed): mốc của lần so B2 với B. Thí nghiệm sau B2 phải đổi sang 'hd640s4_p1s5_kdT_c4aug_s*'
 TAG = f'hd{W}s{N_SHARDS}_p1s5_' + ('kdT' if KD else 'reg')
 REG = ['--ema', '0.999', '--wd', '0.01', '--wd_nobn', '1', '--ls', '0.05', '--cutout', '2']   # gói chống quá khớp, như B
 KDA = ['--kd', '1.0', '--kd_T', '2.0', '--teacher', TEACHER]
@@ -261,10 +261,11 @@ def L(pat):
 G = [('Mốc thí điểm 2.826 ảnh, aug mạnh, 320x160', 'pilot_c4aug_s*'), ('+1 shard, 320x160', 'b9s1_c4aug_s*'),
      ('A: +4 shard, 320x160 (dự phòng, ngừng phát triển)', 'b9s4_c4aug_s*'), ('HD 640x320 p1s5_reg, thí điểm', 'hd640s0_p1s5_reg_c4aug_s*'),
      ('Teacher MiT-B2, HD, thí điểm', 'hd640s0_mitb2_c4aug_s0'), ('HD 640x320 p1s5_reg, +1 shard', 'hd640s1_p1s5_reg_c4aug_s*'),
-     ('B: HD 640x320 p1s5 + chưng cất, +1 shard (mô hình chính)', 'hd640s1_p1s5_kdT_c4aug_s*')]
+     ('B: HD 640x320 p1s5 + chưng cất, +1 shard (dự phòng)', 'hd640s1_p1s5_kdT_c4aug_s*'),
+     ('B2: HD 640x320 p1s5 + chưng cất, +4 shard (mô hình chính)', 'hd640s4_p1s5_kdT_c4aug_s*')]
 for p in sorted({os.path.basename(x)[:-len('_c4aug_s0')] for x in glob.glob('runs/hd640s*_p1s5_*_c4aug_s*') if os.path.basename(x)[-1].isdigit()}):
     n = p.split('_')[0][len('hd640s'):]
-    if p not in ('hd640s0_p1s5_reg', 'hd640s1_p1s5_reg', 'hd640s1_p1s5_kdT') and n.isdigit():
+    if p not in ('hd640s0_p1s5_reg', 'hd640s1_p1s5_reg', 'hd640s1_p1s5_kdT', 'hd640s4_p1s5_kdT') and n.isdigit():
         G.append((f'HD 640x320 {p[len("hd640s") + len(n) + 1:]}, +{n} shard', f'{p}_c4aug_s*'))
 lines, res = ['| Nhóm | n | Làn đang đi | Làn kề | Không thuộc ta | IoU đường |', '|---|---|---|---|---|---|'], {}
 for title, pat in G:
@@ -287,7 +288,7 @@ pats = ['runs/*/config.json', 'runs/*/final_metrics.json', 'runs/*/diag_last.jso
         'layer_table.csv', 'int8_layers_pct.csv', 'int8_layers_max.csv', 'preprocess_spec.json', 'MANIFEST.json']] + \
        [f'{HB2}/{f}' for f in ['README.md', 'int8_meta.json', 'int8_sim_summary.json', 'export_info.json',
         'layer_table.csv', 'int8_layers_pct.csv', 'int8_layers_max.csv', 'preprocess_spec.json', 'MANIFEST.json']] + \
-       ['eval_runtime/*.json', 'results/*', 'models_final/MODELS.json', 'models_final/*_final_metrics.json', 'models_final/*_config.json']
+       ['eval_runtime/*.json', 'eval_runtime_cmp/*.json', 'results/*', 'models_final/MODELS.json', 'models_final/*_final_metrics.json', 'models_final/*_config.json']
 shutil.rmtree('context_pack', ignore_errors=True); os.makedirs('context_pack'); n = 0
 for pat in pats:
     for p in glob.glob(pat):
@@ -300,13 +301,16 @@ print(n, 'tệp | context_pack.zip', round(os.path.getsize('context_pack.zip') /
 """
 
 # ---------------------------------------------------------------- 30_eval
-E_CFG = r"""import os, sys, subprocess
+E_CFG = r"""import os, sys, json, subprocess
 os.chdir('/content/drive/MyDrive/capstone_ai')
 ROOT, CODE = '/content/drive/MyDrive/capstone_ai', '/content/code'
-PACK = 'handoff_s3b_fsnet_m_p1s5_640x320_s4'  # gói INT8 của B2 (tạo bằng 40_int8). Đánh giá B cũ: PACK = '..._640x320', CFG = 'pipeline_b.json'
-CFG = 'pipeline_b2.json'
+CFG = 'pipeline_b.json'      # B2 (mô hình chính). Đánh giá B dự phòng: 'pipeline_b_fallback.json'
+PACK = json.load(open(f'{CODE}/config/{CFG}'))['pack_dir']     # gói lấy từ CHÍNH cấu hình: eval_dataset, cell vẽ và bài kiểm gói cùng một nguồn
+print('CẤU HÌNH', CFG, '| GÓI', PACK, flush=True)
 N = 0                                           # 0 = cả 408 ảnh test (int8ref khoảng 1 đến 3 s mỗi ảnh trên CPU Colab: chưa đo)
 BACKENDS = 'int8ref,onnx'
+# So sánh các chế độ (cell 4): hậu xử lý standard | fast | half (lưới 160x320) | quarter (80x160); resize pil_bilinear (mốc) | cv2_linear | cv2_area
+MODES, RESIZES, CMP_BACKEND, OVERLAP_N = 'standard,fast,half,quarter', 'pil_bilinear,cv2_linear', 'onnx', 60
 for f in [f'{PACK}/int8_meta.json', f'{PACK}/int8_model.npz', f'{PACK}/int8_ref.py', f'{PACK}/int8_sim_summary.json', f'{PACK}/fsnet_m_p1s5_c4_640x320.onnx',
           'data/bdd100k_seg.tar', 'data/v2/pilot_drv_x_640x320.npy', 'data/v2/pilot_drv_y_640x320.npy', 'data/v2/pilot_drv_y_320x160.npy', 'data/v2/hd_test_640x320/test_list.csv']:
     print(f'{f:55s}', 'có' if os.path.exists(f) else 'THIẾU')
@@ -330,14 +334,29 @@ print('KẾT QUẢ kiểm đơn vị:', 'ĐẠT' if rc == 0 else f'KHÔNG ĐẠT
 
 E_RUN = r"""# 2) runtime trên 408 ảnh test: ảnh gốc 1280x720 trong tar -> runtime.pipeline -> mặt nạ, IoU ở lưới 320x160.
 #    Phải khớp int8_sim trong +-0,001 (int8ref với "pct", onnx với "fp32" trong int8_sim_summary.json của gói); in thời gian từng khâu.
-#    Thời gian ở đây là CPU Colab, KHÔNG phải A53 của board.
-args = ['-m', 'runtime.eval_dataset', '--root', ROOT, '--config', f'{CODE}/config/{CFG}', '--backends', BACKENDS, '--tol', '0.001']
+#    Thời gian ở đây là CPU Colab, KHÔNG phải A53 của board. Cell này chỉ kiểm tính đúng (chế độ standard, resize mặc định); so sánh chế độ ở cell sau.
+args = ['-m', 'runtime.eval_dataset', '--root', ROOT, '--config', f'{CODE}/config/{CFG}', '--backends', BACKENDS, '--tol', '0.001',
+        '--modes', 'standard', '--resizes', '', '--overlap_n', '0']
 if N: args += ['--n', str(N)]
 rc = run(args, 'runtime_eval')
 if rc != 0: print(f'KHÔNG ĐẠT (mã {rc}): dán đoạn trên cho tôi')
 """
 
-E_VIS = r"""# 3) (tùy chọn) vẽ kết quả lên 4 ảnh test để kiểm bằng mắt: màu lớp, chấm đỏ = ranh giới khoảng trống, chữ thập = mép và tâm làn
+E_CMP = r"""# 3) So sánh các chế độ để giảm pre + post + tier2 (mục tiêu <= 10 ms trên CPU Colab), trên backend onnx (nhanh), cả 408 ảnh.
+#    Mục in 5: chế độ hậu xử lý (standard, fast, half, quarter): IoU, lệch tâm làn so với nhãn, thời gian. Tiêu chí đặt trước: tỉ lệ ảnh lệch tâm > 100 px
+#              (tính cả ảnh thiếu tâm) xấu hơn standard quá 0,01 thì KHÔNG DÙNG.
+#    Mục in 6: resize của tiền xử lý (PIL NumPy mốc, cv2_linear): pixel lệch so với cache, IoU, thời gian. Tiêu chí đặt trước: IoU giảm quá 0,001 thì GIỮ mốc.
+#    Mục in 7: chạy gối đầu hai luồng so với tuần tự. Mục in 8: pre + post + tier2 so với mục tiêu.
+#    Kết quả ghi ở eval_runtime_cmp/runtime_eval_summary.json (không đè kết quả cell 3). Đo trên onnx FP32, KHÔNG qua lượng tử INT8:
+#    muốn thử resize khác trên đường INT8 thì đặt CMP_BACKEND = 'int8ref' (rất chậm).
+args = ['-m', 'runtime.eval_dataset', '--root', ROOT, '--config', f'{CODE}/config/{CFG}', '--backends', CMP_BACKEND, '--cmp_backend', CMP_BACKEND, '--out', 'eval_runtime_cmp',
+        '--modes', MODES, '--resizes', RESIZES, '--overlap_n', str(OVERLAP_N), '--max_iou_drop', '0.001', '--max_gt100_worse', '0.01', '--target_ms', '10']
+if N: args += ['--n', str(N)]
+rc = run(args, 'runtime_eval_cmp')
+if rc != 0: print(f'mã thoát {rc}: dán đoạn trên cho tôi')
+"""
+
+E_VIS = r"""# 4) (tùy chọn) vẽ kết quả lên 4 ảnh test để kiểm bằng mắt: màu lớp, chấm đỏ = ranh giới khoảng trống, chữ thập = mép và tâm làn
 import io, csv, numpy as np
 sys.path.insert(0, CODE); sys.path.insert(0, f'{ROOT}/repo')
 from PIL import Image
@@ -359,8 +378,8 @@ for k in [0, 100, 200, 300]:
 # ---------------------------------------------------------------- 40_int8
 INT8 = r"""import os, subprocess, sys
 os.chdir('/content/drive/MyDrive/capstone_ai'); os.makedirs('runs', exist_ok=True)
-# CẤU HÌNH. Mặc định B2 (ứng viên thay B): fsnet_m_p1s5 640x320, 4 shard -> handoff_s3b_fsnet_m_p1s5_640x320_s4.
-# B (đang là mô hình chính, giữ làm dự phòng): RUN = 'runs/hd640s1_p1s5_kdT_c4aug_s0', OUT = 'handoff_s3b_fsnet_m_p1s5_640x320'. KHÔNG đặt OUT trùng gói B.
+# CẤU HÌNH. Mặc định B2 (mô hình chính từ 2026-11-25): fsnet_m_p1s5 640x320, 4 shard -> handoff_s3b_fsnet_m_p1s5_640x320_s4.
+# B (dự phòng): RUN = 'runs/hd640s1_p1s5_kdT_c4aug_s0', OUT = 'handoff_s3b_fsnet_m_p1s5_640x320'. KHÔNG đặt OUT trùng gói đang dùng.
 W, H, ARCH = 640, 320, 'fsnet_m_p1s5'
 RUN = 'runs/hd640s4_p1s5_kdT_c4aug_s0'     # last.pt["model"] là trọng số triển khai (bản EMA nếu run bật EMA); trùng tệp trong models_final/
 OUT = 'handoff_s3b' if (W, H) == (320, 160) else f'handoff_s3b_{ARCH}_{W}x{H}_s4'   # gói HD ghi ra thư mục khác, không đè gói B
@@ -393,7 +412,7 @@ def nb(cells):
 
 NOTEBOOKS = [('10_data', [DEPLOY, D_STATUS, D_CACHE, D_SPOT, D_SHARDS, D_WATCH]),
              ('20_train', [DEPLOY, T_CLEAN, T_CFG, T_RUN, T_CMP, T_FREEZE]),
-             ('30_eval', [DEPLOY, E_CFG, E_TESTS, E_RUN, E_VIS]),
+             ('30_eval', [DEPLOY, E_CFG, E_TESTS, E_RUN, E_CMP, E_VIS]),
              ('40_int8', [DEPLOY, INT8])]
 
 if __name__ == '__main__':

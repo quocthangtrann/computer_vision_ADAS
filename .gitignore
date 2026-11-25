@@ -13,3 +13,4 @@ results/
 eval_runtime/
 *.onnx
 *.npz
+eval_runtime_cmp/
