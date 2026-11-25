@@ -10,10 +10,19 @@ from google.colab import drive
 drive.mount('/content/drive')
 CODE, URL = '/content/code', 'github.com/quocthangtrann/computer_vision_ADAS.git'
 env = {**os.environ, 'GIT_TERMINAL_PROMPT': '0'}
+def sh(cmd):       # chạy lệnh, GOM cả stdout và stderr (stderr của lệnh con không hiện trong ô kết quả Colab nếu không gom)
+    return subprocess.run(cmd, shell=True, capture_output=True, text=True, env=env)
 if not os.path.exists(CODE):
-    subprocess.run(f'git clone https://{URL} {CODE}', shell=True, check=True, env=env)
+    r = sh(f'git clone https://{URL} {CODE}')
+    if r.returncode: raise SystemExit('git clone lỗi:\n' + (r.stderr or r.stdout))
 else:
-    subprocess.run(f'git -C {CODE} pull', shell=True, check=True, env=env)
+    r = sh(f'git -C {CODE} pull --ff-only')
+    if r.returncode:       # thường do sửa tay tệp trong /content/code: cất vào stash (KHÔNG xóa) rồi pull lại
+        print('git pull lỗi:\n' + (r.stderr or r.stdout).strip()[-800:])
+        print('thay đổi cục bộ trong', CODE + ':\n' + (sh(f'git -C {CODE} status --short').stdout.strip() or '(không có)'))
+        r = sh(f'git -C {CODE} stash push -u -m deploy-auto && git -C {CODE} pull --ff-only')
+        if r.returncode: raise SystemExit('pull vẫn lỗi sau khi stash (không phải do sửa cục bộ):\n' + (r.stderr or r.stdout).strip()[-800:])
+        print('đã cất thay đổi cục bộ vào stash (xem lại: git -C /content/code stash list) và pull xong')
 subprocess.run(f'rsync -a --exclude .git {CODE}/repo/ /content/drive/MyDrive/capstone_ai/repo/', shell=True, check=True)
 try: import segmentation_models_pytorch
 except ImportError: subprocess.run([sys.executable, '-m', 'pip', 'install', '-q', 'segmentation-models-pytorch'], check=True)
