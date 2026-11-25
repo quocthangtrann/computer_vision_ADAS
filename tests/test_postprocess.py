@@ -18,6 +18,17 @@ except ImportError:
     torch = None
 
 
+def assert_labels_match_up_to_ties(tc, got_mask, ref_logits, tol=1e-5, msg=''):
+    """Nhãn NumPy so với logit torch (C, H, W): lớp NumPy chọn phải nằm trong 2 * tol của logit lớn nhất theo torch.
+    Float32 trên máy khác (CPU, NumPy, torch khác) lệch nhau bậc làm tròn, nên nhãn khác nhau CHỈ được ở pixel hai lớp đầu gần như hòa
+    (logit lượng tử làm tròn trung bình có nhiều hòa chính xác, nội suy giữ nguyên hòa). Ngưỡng tỉ lệ pixel trùng thì không bền: lưới 80x160 chỉ có 12.800 pixel."""
+    chosen = np.take_along_axis(ref_logits, got_mask[None].astype(np.int64), 0)[0]
+    shortfall = ref_logits.max(0) - chosen
+    n_diff = int((got_mask != ref_logits.argmax(0)).sum())
+    tc.assertLessEqual(float(shortfall.max()), 2 * tol, f'{msg}: có pixel chọn lớp kém hơn lớp lớn nhất {shortfall.max():.2e} (> {2 * tol:.0e}); {n_diff} pixel khác nhãn torch')
+    return n_diff
+
+
 def logits(rng, h=40, w=80, smooth=True):
     q = rng.integers(-127, 128, (4, h, w))
     if smooth:      # logit thật trơn theo không gian: lấy trung bình khối để có vùng lớp liền
@@ -43,10 +54,9 @@ class PostprocessTest(unittest.TestCase):
             ref = F.interpolate(torch.from_numpy(x[None]), size=(H, W), mode='bilinear', align_corners=False)[0].numpy()
             got = upsample_bilinear(x, H, W)
             self.assertLess(float(np.abs(got - ref).max()), 1e-5, f'{h}x{w} -> {H}x{W}')
-            m_ref = ref.argmax(0).astype(np.uint8)
-            agree = float((mask_standard(lg, H, W) == m_ref).mean())
-            print(f'\n  bilinear {h}x{w}->{H}x{W}: trùng bit {float((got == ref).mean()):.6f}, trùng nhãn {agree:.6f}')
-            self.assertGreaterEqual(agree, 0.9999)
+            m = mask_standard(lg, H, W)
+            n_diff = assert_labels_match_up_to_ties(self, m, ref, msg=f'{h}x{w}->{H}x{W}')
+            print(f'\n  bilinear {h}x{w}->{H}x{W}: trùng bit {float((got == ref).mean()):.6f}, {n_diff} / {m.size} pixel khác nhãn torch (đều là hòa)')
 
     @unittest.skipIf(torch is None, 'không có torch')
     def test_nearest_matches_torch(self):
@@ -95,8 +105,9 @@ class GridModesTest(unittest.TestCase):
         x = lg.as_float()
         for mode, d in GRID_DIV.items():
             m, _ = Postprocessor({'mode': mode}).mask(lg, self.HW, self.G2F)
-            ref = F.interpolate(torch.from_numpy(x[None]), size=(320 // d, 640 // d), mode='bilinear', align_corners=False).argmax(1)[0].numpy()
-            self.assertGreaterEqual(float((m == ref).mean()), 0.9999, mode)
+            ref = F.interpolate(torch.from_numpy(x[None]), size=(320 // d, 640 // d), mode='bilinear', align_corners=False)[0].numpy()
+            self.assertEqual(m.shape, ref.shape[1:])
+            assert_labels_match_up_to_ties(self, m, ref, msg=mode)
 
     def test_tier2_stays_close_to_standard(self):
         lg = lane_logits()
