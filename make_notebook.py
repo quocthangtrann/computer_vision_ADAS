@@ -238,7 +238,7 @@ os.chdir('/content/drive/MyDrive/capstone_ai')
 sha = lambda p: hashlib.sha256(open(p, 'rb').read()).hexdigest()
 os.makedirs('models_final', exist_ok=True); os.makedirs('results', exist_ok=True)
 # 1) đóng băng: chỉ lấy last.pt["model"] (trọng số đánh giá và triển khai, bản EMA nếu có). Tên đã có thì KHÔNG ghi đè.
-FREEZE = {}     # ví dụ {'B2_hd640s4_p1s5_kdT_s0': 'runs/hd640s4_p1s5_kdT_c4aug_s0'}; để trống = chỉ làm mới bảng và context_pack
+FREEZE = {'B2_hd640s4_p1s5_kdT_s0': 'runs/hd640s4_p1s5_kdT_c4aug_s0'}     # s0 chọn trước, không chọn seed tốt nhất; đã có thì không ghi đè; {} = chỉ làm mới bảng và context_pack
 info = json.load(open('models_final/MODELS.json')) if os.path.exists('models_final/MODELS.json') else {}
 for name, d in FREEZE.items():
     out = f'models_final/{name}_weights.pt'
@@ -278,11 +278,14 @@ print('\n' + md)
 
 # 3) làm mới gói ngữ cảnh cho Claude Code (chỉ tệp chữ nhỏ)
 HB = 'handoff_s3b_fsnet_m_p1s5_640x320'
+HB2 = HB + '_s4'
 pats = ['runs/*/config.json', 'runs/*/final_metrics.json', 'runs/*/diag_last.json', 'runs/*/metrics.csv', 'runs/summary.csv', 'eval_report/*',
         'data_spec_v1.json', 'data/cache_v1/cache_spec.json', 'data/v2/manifest_v2.csv', 'data/v2/split_report.json', 'data/v2/pilot_drv_manifest.csv',
         'handoff_s3a_v2/README.md', 'handoff_s3a_v2/preprocess_spec.json', 'handoff_s3a_v2/layer_table.csv', 'handoff_s3b/README.md',
         'handoff_s3b/int8_meta.json', 'handoff_s3b/int8_sim_summary.json', 'handoff_s3b/export_info.json', 'handoff_s3b/layer_table.csv',
         'handoff_s3b/int8_layers_pct.csv'] + [f'{HB}/{f}' for f in ['README.md', 'int8_meta.json', 'int8_sim_summary.json', 'export_info.json',
+        'layer_table.csv', 'int8_layers_pct.csv', 'int8_layers_max.csv', 'preprocess_spec.json', 'MANIFEST.json']] + \
+       [f'{HB2}/{f}' for f in ['README.md', 'int8_meta.json', 'int8_sim_summary.json', 'export_info.json',
         'layer_table.csv', 'int8_layers_pct.csv', 'int8_layers_max.csv', 'preprocess_spec.json', 'MANIFEST.json']] + \
        ['eval_runtime/*.json', 'results/*', 'models_final/MODELS.json', 'models_final/*_final_metrics.json', 'models_final/*_config.json']
 shutil.rmtree('context_pack', ignore_errors=True); os.makedirs('context_pack'); n = 0
@@ -300,7 +303,8 @@ print(n, 'tệp | context_pack.zip', round(os.path.getsize('context_pack.zip') /
 E_CFG = r"""import os, sys, subprocess
 os.chdir('/content/drive/MyDrive/capstone_ai')
 ROOT, CODE = '/content/drive/MyDrive/capstone_ai', '/content/code'
-PACK = 'handoff_s3b_fsnet_m_p1s5_640x320'     # gói INT8 của B (tạo bằng 40_int8)
+PACK = 'handoff_s3b_fsnet_m_p1s5_640x320_s4'  # gói INT8 của B2 (tạo bằng 40_int8). Đánh giá B cũ: PACK = '..._640x320', CFG = 'pipeline_b.json'
+CFG = 'pipeline_b2.json'
 N = 0                                           # 0 = cả 408 ảnh test (int8ref khoảng 1 đến 3 s mỗi ảnh trên CPU Colab: chưa đo)
 BACKENDS = 'int8ref,onnx'
 for f in [f'{PACK}/int8_meta.json', f'{PACK}/int8_model.npz', f'{PACK}/int8_ref.py', f'{PACK}/int8_sim_summary.json', f'{PACK}/fsnet_m_p1s5_c4_640x320.onnx',
@@ -327,7 +331,7 @@ print('KẾT QUẢ kiểm đơn vị:', 'ĐẠT' if rc == 0 else f'KHÔNG ĐẠT
 E_RUN = r"""# 2) runtime trên 408 ảnh test: ảnh gốc 1280x720 trong tar -> runtime.pipeline -> mặt nạ, IoU ở lưới 320x160.
 #    Phải khớp int8_sim trong +-0,001 (int8ref với "pct", onnx với "fp32" trong int8_sim_summary.json của gói); in thời gian từng khâu.
 #    Thời gian ở đây là CPU Colab, KHÔNG phải A53 của board.
-args = ['-m', 'runtime.eval_dataset', '--root', ROOT, '--backends', BACKENDS, '--tol', '0.001']
+args = ['-m', 'runtime.eval_dataset', '--root', ROOT, '--config', f'{CODE}/config/{CFG}', '--backends', BACKENDS, '--tol', '0.001']
 if N: args += ['--n', str(N)]
 rc = run(args, 'runtime_eval')
 if rc != 0: print(f'KHÔNG ĐẠT (mã {rc}): dán đoạn trên cho tôi')
@@ -341,7 +345,7 @@ from IPython.display import display
 from runtime.pipeline import Pipeline
 from runtime.viz import overlay
 import make_hd_pilot as mhp
-pl = Pipeline(f'{CODE}/config/pipeline_b.json', ROOT, backend='onnx')
+pl = Pipeline(f'{CODE}/config/{CFG}', ROOT, backend='onnx')
 man = list(csv.DictReader(open('data/v2/pilot_drv_manifest.csv'))); te = [r for r in man if r['split_v2'] == 'test']
 tar = '/content/hd_scratch/bdd100k_seg.tar' if os.path.exists('/content/hd_scratch/bdd100k_seg.tar') else 'data/bdd100k_seg.tar'
 imgs, _ = mhp.index_tar(tar); fh = open(tar, 'rb'); os.makedirs('eval_runtime', exist_ok=True)
@@ -355,11 +359,11 @@ for k in [0, 100, 200, 300]:
 # ---------------------------------------------------------------- 40_int8
 INT8 = r"""import os, subprocess, sys
 os.chdir('/content/drive/MyDrive/capstone_ai'); os.makedirs('runs', exist_ok=True)
-# CẤU HÌNH. Mặc định B (mô hình chính): fsnet_m_p1s5 640x320 -> handoff_s3b_fsnet_m_p1s5_640x320.
-# A (dự phòng, ngừng phát triển): W, H, ARCH = 320, 160, 'fsnet_m'; RUN = 'runs/b9s4_c4aug_s0' -> handoff_s3b
+# CẤU HÌNH. Mặc định B2 (ứng viên thay B): fsnet_m_p1s5 640x320, 4 shard -> handoff_s3b_fsnet_m_p1s5_640x320_s4.
+# B (đang là mô hình chính, giữ làm dự phòng): RUN = 'runs/hd640s1_p1s5_kdT_c4aug_s0', OUT = 'handoff_s3b_fsnet_m_p1s5_640x320'. KHÔNG đặt OUT trùng gói B.
 W, H, ARCH = 640, 320, 'fsnet_m_p1s5'
-RUN = 'runs/hd640s1_p1s5_kdT_c4aug_s0'     # last.pt["model"] là trọng số triển khai (bản EMA nếu run bật EMA); trùng tệp trong models_final/
-OUT = 'handoff_s3b' if (W, H) == (320, 160) else f'handoff_s3b_{ARCH}_{W}x{H}'   # gói HD ghi ra thư mục khác, không đè gói 320x160
+RUN = 'runs/hd640s4_p1s5_kdT_c4aug_s0'     # last.pt["model"] là trọng số triển khai (bản EMA nếu run bật EMA); trùng tệp trong models_final/
+OUT = 'handoff_s3b' if (W, H) == (320, 160) else f'handoff_s3b_{ARCH}_{W}x{H}_s4'   # gói HD ghi ra thư mục khác, không đè gói B
 SZ = ['--arch', ARCH, '--w', str(W), '--h', str(H)]
 
 def run(script, *args):

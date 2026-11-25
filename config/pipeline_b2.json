@@ -1,0 +1,26 @@
+{
+ "_comment": "Pipeline cho B2 (hd640s4_p1s5_kdT, 4 shard). Giống pipeline_b.json trừ gói INT8. pack_dir tính từ --root; Tham số tầng 2 CHƯA chỉnh trên ảnh webcam thật.",
+ "model_name": "fsnet_m_p1s5",
+ "pack_dir": "handoff_s3b_fsnet_m_p1s5_640x320_s4",
+ "preprocess": "preprocess_b2.json",
+ "backend": {
+  "name": "int8ref",
+  "onnx_file": "fsnet_m_p1s5_c4_640x320.onnx",
+  "onnx_input": "float",
+  "int8_ref_py": null
+ },
+ "postprocess": {
+  "mode": "standard",
+  "n_cols": 32,
+  "n_rows": 8,
+  "drivable_include_class1": false,
+  "row_top_frac": 0.6,
+  "row_bottom_frac": 0.98,
+  "ego_x_frac": 0.5,
+  "merge_max_gap_frac": 0.5
+ },
+ "packet": {
+  "include_logits": false,
+  "include_mask": false
+ }
+}
